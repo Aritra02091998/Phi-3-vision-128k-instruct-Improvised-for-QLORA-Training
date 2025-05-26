@@ -1,0 +1,96 @@
+# Issue has been discussed here: https://huggingface.co/microsoft/Phi-3.5-vision-instruct/discussions/33
+
+This model Phi-3-vision-128K-instruct has been downloaded locally it has lot of bugs which 
+doesn't let the model work with QLORA with Flash-attn.
+
+Normal LORA works fine with the HF model.
+
+Major trigger issue is the incompatible data types which causes the QLORA computation fail.
+
+So we have modified few model files, hence now the code runs from this local repo.
+
+-> Please note that flash-attn works only with bfloat16 and float16 (fp16) dtypes.
+
+************************************** List of Changes ***************************************
+
+#1. modeling_phi3.py: Here we have force casted the q,k,v states to "bfloat16" to make it compatible with flash attn.
+
+if query_states.dtype == torch.float32:
+
+print("Before casting:")
+print(f"query_states dtype: {query_states.dtype}")
+print(f"key_states dtype: {key_states.dtype}")
+print(f"value_states dtype: {value_states.dtype}")
+
+if torch.is_autocast_enabled():
+    target_dtype = torch.get_autocast_gpu_dtype()
+# Handle the case where the model is quantized
+elif hasattr(self.config, "_pre_quantization_dtype"):
+    target_dtype = self.config._pre_quantization_dtype
+else:
+    target_dtype = self.qkv_proj.weight.dtype
+
+logger.warning_once(
+    f"The input hidden states seems to be silently casted in float32, this might be related to"
+    f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+    f" {target_dtype}."
+)
+
+query_states = query_states.to(torch.bfloat16)
+key_states = key_states.to(torch.bfloat16)
+value_states = value_states.to(torch.bfloat16)
+
+print("After casting:")
+print(f"query_states dtype: {query_states.dtype}")
+print(f"key_states dtype: {key_states.dtype}")
+print(f"value_states dtype: {value_states.dtype}")
+
+-----------------------------------------------------------------------------------------------
+
+#2. image_embedding_phi3_v.py: Here we did modification in the below class.
+
+Same as before, we have force casted the q,k,v states to bfloat16.
+
+
+class CLIPAttentionFA2(CLIPAttention):
+    """Add flash attention 2 to CLIPAttention. (This is only used in the vision encoder)"""
+
+    def forward(self,
+        hidden_states,
+        attention_mask=None,
+        causal_attention_mask=None,
+        output_attentions=False,
+    ):
+        """Input shape: Batch x Time x Channel"""
+
+        assert attention_mask is None, "CLIPAttentionFA2 does not support attention_mask"
+        assert causal_attention_mask is None, "CLIPAttentionFA2 does not support causal_attention_mask"
+        assert output_attentions is False, "CLIPAttentionFA2 does not support output_attentions"
+
+        bsz, tgt_len, embed_dim = hidden_states.size()
+        query_states = self.q_proj(hidden_states).reshape(bsz, tgt_len, self.num_heads, self.head_dim)
+        key_states = self.k_proj(hidden_states).reshape(bsz, tgt_len, self.num_heads, self.head_dim)
+        value_states = self.v_proj(hidden_states).reshape(bsz, tgt_len, self.num_heads, self.head_dim)
+
+        # ───────── FORCE FLASHATTN-COMPATIBLE DTYPE ─────────
+        target_dtype = torch.float16    # or torch.bfloat16
+        query_states = query_states.to(target_dtype)
+        key_states   = key_states.to(target_dtype)
+        value_states = value_states.to(target_dtype)
+        # ────────────────────────────────────────────────────────
+
+        attn_output = flash_attn_func(
+            query_states,
+            key_states,
+            value_states,
+            dropout_p=self.dropout if self.training else 0.0,
+            softmax_scale=self.scale,
+            causal=False,
+        ).reshape(bsz, tgt_len, embed_dim)
+
+
+********************************************************************************************
+
+Note: These changes has been specifically done for running QLORA with flash-attn.
+
+For normal LORA-fying the model, the standard model in Huggingface is well and good.
