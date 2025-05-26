@@ -1,19 +1,21 @@
 # Issue has been discussed here: https://huggingface.co/microsoft/Phi-3.5-vision-instruct/discussions/33
+# Huggingface Model page: https://huggingface.co/microsoft/Phi-3-vision-128k-instruct
+# Download the model safetensors from the official Repo and place them in the directory, then in your code, import the model from this local repo.
+# You can use fetch_model.py to download the model from Safetensors.
 
-This model Phi-3-vision-128K-instruct has been downloaded locally it has lot of bugs which 
-doesn't let the model work with QLORA with Flash-attn.
+This model Phi-3-vision-128K-instruct has been downloaded locally It has a lot of bugs which doesn't let the model work with QLORA with Flash-attn.
 
 Normal LORA works fine with the HF model.
 
-Major trigger issue is the incompatible data types which causes the QLORA computation fail.
+The major trigger issue is the incompatible data types, which cause the QLORA computation to fail.
 
-So we have modified few model files, hence now the code runs from this local repo.
+So we have modified a few model files, hence now the code runs from this local repo.
 
 -> Please note that flash-attn works only with bfloat16 and float16 (fp16) dtypes.
 
 ************************************** List of Changes ***************************************
 
-#1. modeling_phi3.py: Here we have force casted the q,k,v states to "bfloat16" to make it compatible with flash attn.
+#1. modeling_phi3.py: Here we have forced casted the q,k,v states to "bfloat16" to make it compatible with flash attn.
 
 if query_states.dtype == torch.float32:
 
